@@ -38,7 +38,9 @@ public struct BazelLocator {
                                                   completionInfo = processCompletionInfo
     }
     task.launch()
+    print("%%%%%%%% BEFORE")
     _ = semaphore.wait(timeout: DispatchTime.distantFuture)
+    print("%%%%%%%% AFTER")
 
     guard let info = completionInfo else {
       return nil
@@ -56,6 +58,7 @@ public struct BazelLocator {
       return nil
     }
 
+    print("Bazel URL: \(bazelURL)")
     UserDefaults.standard.set(bazelURL, forKey: BazelLocator.DefaultBazelURLKey)
     return bazelURL
   }

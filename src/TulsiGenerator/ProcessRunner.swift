@@ -179,10 +179,16 @@ public final class ProcessRunner {
     let dispatchGroup = DispatchGroup()
     let notificationCenter = NotificationCenter.default
     func registerAndStartReader(_ fileHandle: FileHandle, outputData: NSMutableData) -> NSObjectProtocol {
+      print("**** Process reading data: \(outputData) - \(fileHandle)")
+
       let observer = notificationCenter.addObserver(forName: NSNotification.Name.NSFileHandleReadToEndOfFileCompletion,
                                                     object: fileHandle,
                                                     queue: nil) { (notification: Notification) in
-        defer { dispatchGroup.leave() }
+        print("**** DG DEFER: \(fileHandle) \(notification)")
+        defer {
+          print("**** DG LEAVE: \(fileHandle)")
+          dispatchGroup.leave()
+        }
         if let err = notification.userInfo?["NSFileHandleError"] as? NSNumber {
           assertionFailure("Read from pipe failed with error \(err)")
         }
@@ -193,6 +199,7 @@ public final class ProcessRunner {
         outputData.append(data)
       }
 
+      print("**** DG ENTER: \(fileHandle)")
       dispatchGroup.enter()
 
       // The docs for readToEndOfFileInBackgroundAndNotify are unclear as to exactly what work is
@@ -203,26 +210,37 @@ public final class ProcessRunner {
       return observer
     }
 
+    let deadlineTime = DispatchTime.now() + .seconds(1)
     let stdoutData = NSMutableData()
-    process.standardOutput = Pipe()
-    let stdoutObserver = registerAndStartReader((process.standardOutput! as AnyObject).fileHandleForReading,
-                                                outputData: stdoutData)
     let stderrData = NSMutableData()
+
+    process.standardOutput = Pipe()
     process.standardError = Pipe()
-    let stderrObserver = registerAndStartReader((process.standardError! as AnyObject).fileHandleForReading,
-                                                outputData: stderrData)
+
+    DispatchQueue.main.asyncAfter(deadline: deadlineTime) {
+      let stdoutObserver = registerAndStartReader((process.standardOutput! as AnyObject).fileHandleForReading,
+                                                  outputData: stdoutData)
+      let stderrObserver = registerAndStartReader((process.standardError! as AnyObject).fileHandleForReading,
+                                                  outputData: stderrData)
+    }
 
     process.terminationHandler = { (process: Process) -> Void in
+      print("**** Process terminated: \(process) isMainThread: \(Thread.isMainThread)")
+
       // The termination handler's thread is used to allow the caller's callback to do off-main work
       // as well.
       assert(!Thread.isMainThread,
              "Process termination handler unexpectedly called on main thread.")
+      print("**** DG ABOUT TO WAIT")
       _ = dispatchGroup.wait(timeout: DispatchTime.distantFuture)
+      print("**** DG DONE WAITING")
 
       // If the localizedMessageLogger was an arg, report total runtime of this process + cleanup.
       if let messageLogger = messageLogger {
         self.timedProcessRunnerObserver.stopLogging(process: process, messageLogger: messageLogger)
       }
+
+      print("**** Calling termination handler: \(process)")
 
       terminationHandler(CompletionInfo(process: process,
                                         commandlineString: commandlineRunnableString,
@@ -230,8 +248,8 @@ public final class ProcessRunner {
                                         stderr: stderrData as Data))
 
       Thread.doOnMainQueue {
-        notificationCenter.removeObserver(stdoutObserver)
-        notificationCenter.removeObserver(stderrObserver)
+        // notificationCenter.removeObserver(stdoutObserver)
+        // notificationCenter.removeObserver(stderrObserver)
         assert(self.pendingProcesses.contains(process), "terminationHandler called with unexpected process")
         self.pendingProcesses.remove(process)
       }
